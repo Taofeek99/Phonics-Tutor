@@ -1,116 +1,133 @@
+\
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
+const LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"];
+
+const USERS_KEY = "taobel_users_v2";
+const CURR_KEY = "taobel_current_user_v2";
+
+function loadUsers(){ try{ return JSON.parse(localStorage.getItem(USERS_KEY) || "[]"); }catch{ return []; } }
+function saveUsers(u){ localStorage.setItem(USERS_KEY, JSON.stringify(u)); }
+function generateId(){ return 'u_'+Date.now().toString(36); }
+
 export default function App(){
-  const units = useMemo(()=>[
-    { id:"consonants", title:"Consonants", items:[{grapheme:"m",example:"map"},{grapheme:"p",example:"pen"},{grapheme:"t",example:"top"},{grapheme:"s",example:"sun"},{grapheme:"n",example:"net"},{grapheme:"k",example:"cat"}]},
-    { id:"short-vowels", title:"Short vowels", items:[{grapheme:"a",example:"apple"},{grapheme:"e",example:"egg"},{grapheme:"i",example:"igloo"},{grapheme:"o",example:"octopus"},{grapheme:"u",example:"umbrella"}]},
-    { id:"digraphs", title:"Digraphs", items:[{grapheme:"sh",example:"ship"},{grapheme:"ch",example:"chair"},{grapheme:"th",example:"thumb"},{grapheme:"ng",example:"ring"}]}
-  ],[]);
+  const [users, setUsers] = useState(() => loadUsers());
+  const [currentUser, setCurrentUser] = useState(() => { try{ return JSON.parse(localStorage.getItem(CURR_KEY)); }catch{return null} });
+  const [view, setView] = useState(currentUser ? 'app' : 'auth');
+  const [nameInput, setNameInput] = useState('');
+  const [gPlaying, setGPlaying] = useState(null);
+  const audioRefs = useRef({});
+  const [voice, setVoice] = useState(null);
 
-  const [unitIndex,setUnitIndex]=useState(0);
-  const unit=units[unitIndex];
-  const [mode,setMode]=useState('learn');
-  const [selected, setSelected] = useState(null);
+  useEffect(()=>{
+    LETTERS.forEach(l=>{ audioRefs.current[l] = new Audio('/public/sounds/' + l.toLowerCase() + '.wav'); });
+    // pick a male voice if available
+    const pickMale = (vs)=>{ if(!vs) return null; return vs.find(v=>/male|man|Daniel|Alex|Geraint|Thomas|en-GB/i.test(v.name || v.lang)) || vs.find(v=>/en-?/i.test(v.lang)); };
+    const vs = window.speechSynthesis.getVoices ? window.speechSynthesis.getVoices() : [];
+    const m = pickMale(vs); if(m) setVoice(m);
+    if(window.speechSynthesis) window.speechSynthesis.onvoiceschanged = () => { const vs2 = window.speechSynthesis.getVoices(); const m2 = pickMale(vs2); if(m2) setVoice(m2); };
+  },[]);
 
-  const [quizItems,setQuizItems]=useState([]);
-  const [quizIndex,setQuizIndex]=useState(0);
-  const [score,setScore]=useState(0);
+  function signup(name){
+    if(!name) return alert('Enter learner name');
+    const u = { id: generateId(), name: name.trim(), progress: {}, createdAt: new Date().toISOString() };
+    const next = [...users, u]; saveUsers(next); setUsers(next);
+    localStorage.setItem(CURR_KEY, JSON.stringify(u)); setCurrentUser(u); setView('app');
+  }
 
-  const recorderRef = useRef(null);
-  const mediaRef = useRef(null);
-  const audioCtxRef = useRef(null);
-  const canvasRef = useRef(null);
-  const [isRecording,setIsRecording]=useState(false);
+  function logout(){ localStorage.removeItem(CURR_KEY); setCurrentUser(null); setView('auth'); setNameInput(''); }
 
-  useEffect(()=>{ if(window.speechSynthesis) window.speechSynthesis.getVoices(); },[]);
+  function playLetter(L){
+    setGPlaying(L);
+    const a = audioRefs.current[L];
+    if(a){ a.currentTime = 0; a.play().catch(()=>{}); }
+    if(window.speechSynthesis && voice){ const u = new SpeechSynthesisUtterance(L + ' says ' + L); u.voice = voice; u.rate = 0.95; window.speechSynthesis.cancel(); window.speechSynthesis.speak(u); }
+    if(currentUser){ const nextUsers = users.map(u=>{ if(u.id !== currentUser.id) return u; const p = Object.assign({}, u.progress || {}); p[L] = (p[L] || 0) + 1; return {...u, progress: p}; }); setUsers(nextUsers); saveUsers(nextUsers); const updated = nextUsers.find(x=>x.id===currentUser.id); localStorage.setItem(CURR_KEY, JSON.stringify(updated)); setCurrentUser(updated); }
+    setTimeout(()=> setGPlaying(null), 700);
+  }
 
-  function speak(text){ if(!window.speechSynthesis) return; const u=new SpeechSynthesisUtterance(text); window.speechSynthesis.cancel(); window.speechSynthesis.speak(u); }
+  if(view === 'auth') return (
+    <div className="login-card card">
+      <h2 className="brand">Taobel Phonics Tutor</h2>
+      <div className="small">Enter learner name to start (type <strong>admin</strong> for admin access)</div>
+      <div style={{marginTop:12}}>
+        <input className="input" placeholder="Learner name" value={nameInput} onChange={e=>setNameInput(e.target.value)} />
+        <div style={{marginTop:8, display:'flex', gap:8}}>
+          <button className="button" onClick={()=> signup(nameInput)}>Start</button>
+          <button className="button" onClick={()=>{ setNameInput(''); }}>Clear</button>
+        </div>
+      </div>
+    </div>
+  );
 
-  function playGrapheme(it){ setSelected(it.grapheme); speak(`${it.grapheme}. For example: ${it.example}. Repeat after me: ${it.example}`); }
-
-  function startQuiz(){ const pool = units.flatMap(u=>u.items); setQuizItems(shuffle(pool)); setQuizIndex(0); setScore(0); setMode('quiz'); }
-  function handleQuizAnswer(choice){ const cur = quizItems[quizIndex]; const correct = choice.grapheme === cur.grapheme; if(correct) { setScore(s=>s+1); speak('Correct!'); } else { speak(`Not quite. The correct answer is ${cur.grapheme}`); } setTimeout(()=>{ if(quizIndex+1 >= quizItems.length) { speak(`Quiz finished. Score ${score + (correct?1:0)} of ${quizItems.length}`); setMode('learn'); } else setQuizIndex(i=>i+1); },900); }
-
-  async function startRecording(){ if(isRecording){ stopRecording(); return; } try{ const s = await navigator.mediaDevices.getUserMedia({audio:true}); mediaRef.current = s; const rec = new MediaRecorder(s); const chunks = []; rec.ondataavailable = e => chunks.push(e.data); rec.onstop = async ()=>{ const blob = new Blob(chunks,{type:'audio/webm'}); const ab = await blob.arrayBuffer(); const ctx = new (window.AudioContext || window.webkitAudioContext)(); audioCtxRef.current = ctx; const buf = await ctx.decodeAudioData(ab); drawWaveform(buf); s.getTracks().forEach(t=>t.stop()); }; recorderRef.current = rec; rec.start(); setIsRecording(true); }catch(e){ alert('Microphone access required'); } }
-  function stopRecording(){ if(recorderRef.current && recorderRef.current.state==='recording') recorderRef.current.stop(); if(mediaRef.current) mediaRef.current.getTracks().forEach(t=>t.stop()); setIsRecording(false); }
-
-  function drawWaveform(audioBuffer){ const canvas = canvasRef.current; if(!canvas) return; const ctx = canvas.getContext('2d'); const raw = audioBuffer.getChannelData(0); const step = Math.ceil(raw.length / canvas.width); ctx.clearRect(0,0,canvas.width,canvas.height); ctx.beginPath(); for(let i=0;i<canvas.width;i++){ const v = raw[i*step]; const y = (1 - (v+1)/2) * canvas.height; if(i===0) ctx.moveTo(i,y); else ctx.lineTo(i,y);} ctx.strokeStyle='#0ea5a4'; ctx.lineWidth=1.2; ctx.stroke(); }
+  if(currentUser && currentUser.name && currentUser.name.toLowerCase() === 'admin'){ return <AdminPanel users={users} setUsers={(u)=>{ setUsers(u); saveUsers(u); }} logout={logout} />; }
 
   return (
     <div className="container">
       <div className="header">
-        <h1>Phonics Tutor</h1>
-        <div style={{marginLeft:'auto'}} className="small">Interactive phonics, quizzes & practice</div>
+        <div className="brand">Taobel Phonics Tutor</div>
+        <div style={{marginLeft:'auto'}} className="small">Welcome {currentUser ? currentUser.name : ''} <button className="button" style={{marginLeft:8}} onClick={logout}>Logout</button></div>
       </div>
 
       <div className="grid">
         <section className="card">
-          <nav style={{display:'flex',gap:8,alignItems:'center'}}>
-            <button onClick={()=>setMode('learn') } className={mode==='learn'? 'active':''}>Learn</button>
-            <button onClick={()=>startQuiz()} className={mode==='quiz'? 'active':''}>Quiz</button>
-            <button onClick={()=>setMode('record')}>Practice</button>
-            <select value={unitIndex} onChange={e=>setUnitIndex(Number(e.target.value))} style={{marginLeft:'auto'}}>
-              {units.map((u,i)=>(<option key={u.id} value={i}>{u.title}</option>))}
-            </select>
-          </nav>
+          <h3>Tap each letter to hear its sound</h3>
+          <div className="grid-letters" style={{marginTop:12}}>
+            {LETTERS.map(L => (
+              <div key={L} className={`letter ${gPlaying===L ? 'playing' : ''}`} onClick={()=>playLetter(L)}>
+                <div style={{fontSize:28,fontWeight:800}}>{L}</div>
+                <div className="small">Tap to play</div>
+              </div>
+            ))}
+          </div>
+        </section>
 
-          {mode==='learn' && (
-            <div style={{marginTop:12}}>
-              <h3>{unit.title}</h3>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
-                {unit.items.map(it=>(
-                  <div key={it.grapheme} style={{padding:8,background:'#f8fafc',borderRadius:8}}>
-                    <div style={{fontSize:20,fontWeight:700}}>{it.grapheme}</div>
-                    <div className="small">Example: {it.example}</div>
-                    <div style={{marginTop:8}}>
-                      <button onClick={()=>playGrapheme(it)}>Play</button>
+        <aside className="card">
+          <h4>Progress</h4>
+          {currentUser ? (
+            <div>
+              <div className="small">Learner: <strong>{currentUser.name}</strong></div>
+              <div style={{marginTop:8}}>
+                {Object.keys(currentUser.progress || {}).length===0 && <div className="small">No practice yet</div>}
+                {LETTERS.map(L => (
+                  <div key={L} style={{display:'flex',justifyContent:'space-between',alignItems:'center', marginTop:8}}>
+                    <div>{L}</div>
+                    <div style={{width:'60%'}}>
+                      <div className="progress-bar"><div className="progress-fill" style={{width: Math.min(100, (currentUser.progress?.[L]||0)*10) + '%'}}></div></div>
                     </div>
+                    <div className="small" style={{marginLeft:8}}>{currentUser.progress?.[L] || 0}</div>
                   </div>
                 ))}
               </div>
             </div>
-          )}
-
-          {mode==='quiz' && (
-            <div style={{marginTop:12}}>
-              <h3>Quiz</h3>
-              <div className="small">Score: {score}</div>
-              <div style={{marginTop:8}}>
-                {quizItems[quizIndex] && (
-                  <div style={{padding:10,background:'#fff',borderRadius:8}}>
-                    <div>Which letter matches this word: <em>{quizItems[quizIndex].example}</em>?</div>
-                    <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:8,marginTop:8}}>
-                      {shuffle([quizItems[quizIndex], ...getDistractors(units, quizItems[quizIndex])]).map((c,i)=>(
-                        <button key={i} onClick={()=>handleQuizAnswer(c)} style={{padding:10,borderRadius:6}}>{c.grapheme}</button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {mode==='record' && (
-            <div style={{marginTop:12}}>
-              <h3>Practice</h3>
-              <div style={{display:'flex',gap:8,alignItems:'center'}}>
-                <button onClick={startRecording} style={{background:isRecording?'#ef4444':'#10b981',color:'#fff',padding:8,borderRadius:6}}>{isRecording?'Stop':'Record'}</button>
-                <button onClick={()=>{ const c=canvasRef.current; if(c){ c.getContext('2d').clearRect(0,0,c.width,c.height); }}}>Clear</button>
-                <div style={{marginLeft:'auto'}} className="small">Visual feedback below</div>
-              </div>
-              <canvas ref={canvasRef} width={800} height={120} style={{width:'100%',marginTop:10,background:'#fff',borderRadius:6}} />
-            </div>
-          )}
-        </section>
-
-        <aside className="card">
-          <h4>Teacher Dashboard</h4>
-          <div className="small">Learner tracking & simple session notes are saved locally.</div>
+          ) : <div className="small">No user</div>}
         </aside>
       </div>
     </div>
   );
 }
 
+function AdminPanel({users,setUsers,logout}){
+  return (
+    <div className="container">
+      <div style={{display:'flex',alignItems:'center'}}>
+        <h2>Admin — Learners</h2>
+        <div style={{marginLeft:'auto'}}><button className="button" onClick={logout}>Logout</button></div>
+      </div>
+      <div className="card" style={{marginTop:12}}>
+        <h3>All Learners</h3>
+        <div style={{maxHeight:400,overflow:'auto'}}>
+          {users.map(u => (
+            <div key={u.id} style={{padding:8,borderBottom:'1px solid #f1f5f9',display:'flex',justifyContent:'space-between'}}>
+              <div><strong>{u.name}</strong> <div className="small">({u.id})</div></div>
+              <div className="small">Progress items: {Object.keys(u.progress||{}).length}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{marginTop:12}}><button className="button" onClick={()=>{ if(confirm('Reset all progress?')){ const cleared = users.map(u=>({...u,progress:{}})); setUsers(cleared); localStorage.setItem(USERS_KEY, JSON.stringify(cleared)); alert('Progress cleared'); }}}>Reset all progress</button></div>
+      </div>
+    </div>
+  );
+}
+
 function shuffle(a){ const arr=[...a]; for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]];} return arr; }
-function getDistractors(units,current){ const pool = units.flatMap(u=>u.items).filter(it=>it.grapheme!==current.grapheme); return shuffle(pool).slice(0,3); }
