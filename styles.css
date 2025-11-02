@@ -1,4 +1,0 @@
-/* Basic styles (Tailwind classes used in component but Tailwind not required) */
-body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; margin:0; padding:0; background: #f8fafc; color:#0f172a;}
-button { cursor:pointer; }
-code { background:#f1f5f9; padding:2px 4px; border-radius:4px; }
